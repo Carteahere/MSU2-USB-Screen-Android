@@ -90,7 +90,7 @@ app
 
 时间
 
-<img width="400" height="234" alt="sj" src="https://github.com/user-attachments/assets/73294437-a73b-4cef-9bb2-27d66ec91088" />
+<img width="400" height="300" alt="sj" src="https://github.com/user-attachments/assets/fc8dac65-291b-4e4d-b621-3dc146ca5d93" />
 
 
 投屏
