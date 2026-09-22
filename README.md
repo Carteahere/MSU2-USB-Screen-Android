@@ -1,9 +1,9 @@
 # <img src="https://github.com/user-attachments/assets/5a0bbd8f-c0ff-4201-8b43-d495e4fa62b3" width="40" height="40" align="center"> MSU2 USB小屏幕Android端
 
-[下载](https://github.com/SadYuyuko/MSU2-USB-Screen-Android/releases/latest)
+[下载](https://github.com/Carteahere/MSU2-USB-Screen-Android/releases/latest)
 
-基于Windows版 (`MSU2_MINI_DemoV1.6.py`) 移植，适用于 **MSU2 MINI 160×80 0.96寸小屏幕**  
-通过**OTG转接线/口**连接USB小屏幕(VID`0x1A86`/PID`0xFE0C`，CDC-ACM虚拟串口，波特率19200)
+基于Windows版 (`MSU2_MINI_DemoV1.6.py`) 移植，适用于 **MSU2 160×80 0.96寸小屏幕**  
+通过**OTG转接口/线**连接USB小屏幕（VID`0x1A86`/PID`0xFE0C`，CDC-ACM虚拟串口，波特率19200）
 
 ## 功能
 
@@ -31,7 +31,7 @@
 
 ## 使用
 
-1. 用**OTG转接线/口**连接USB小屏幕到手机。
+1. 用**OTG转接口/线**连接USB小屏幕到手机。
 2. 首次启动App授予通知权限（用于投屏前台服务通知），同意系统 USB 授权弹窗。
 3. 日志区显示“设备连接完成，版本 xx”和数据字典即成功。
 4. 默认进入 GIF 动图状态；点击上一个/下一个键或小屏幕触控切换状态，旋转键180°翻转副屏显示。
