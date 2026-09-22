@@ -87,11 +87,9 @@ app
 
 <img width="600" height="680" alt="app" src="https://github.com/user-attachments/assets/aca8b2e1-ee1d-4381-a2ae-d2bdaa4a42e0" />
 
-
 时间
 
 <img width="400" height="300" alt="sj" src="https://github.com/user-attachments/assets/fc8dac65-291b-4e4d-b621-3dc146ca5d93" />
-
 
 投屏
 
