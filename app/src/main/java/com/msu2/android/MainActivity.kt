@@ -55,6 +55,10 @@ import com.msu2.android.ui.StatusProvider
 import com.msu2.android.usb.Msu2Protocol
 import com.msu2.android.usb.Msu2Serial
 import com.msu2.android.usb.SfrRegistry
+import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
+import java.nio.ByteBuffer
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -386,7 +390,7 @@ class MainActivity : AppCompatActivity() {
             serial = null
             currentDeviceId = -1
             connectJob = null
-            clockBgCache = null
+            // 保持 clockBgCache，不轻易重置，断开重连依然可用
             clockBgReading = false
             updateStatus(getString(R.string.status_disconnected))
             resetStateLabel()
@@ -444,7 +448,7 @@ class MainActivity : AppCompatActivity() {
         serial?.close()
         serial = null
         currentDeviceId = -1
-        clockBgCache = null
+        // 保持 clockBgCache，不轻易重置，断开重连依然可用
         clockBgReading = false
     }
 
@@ -668,8 +672,15 @@ class MainActivity : AppCompatActivity() {
             s.ack(Msu2Protocol.lcdPhoto(0, 0, w, h, Msu2Protocol.PAGE_CLK_BG))
             if (inputPending()) return
         }
-        val cache = clockBgCache
-        if (cache == null) startClockBgRead(s)
+        var cache = clockBgCache
+        if (cache == null) {
+            cache = loadClockBgFromDisk()
+            if (cache != null) {
+                clockBgCache = cache
+            } else {
+                startClockBgRead(s)
+            }
+        }
         val now = LocalTime.now()
         val c888 = rgb565To888(getClockColor())
         val textPaint = Paint().apply {
@@ -724,7 +735,9 @@ class MainActivity : AppCompatActivity() {
                 val pixels = IntArray(w * h)
                 var b = 0
                 for (p in pixels.indices) {
-                    val v = ((rgb[b + 1].toInt() and 0xFF) shl 8) or (rgb[b].toInt() and 0xFF)
+                    val high = rgb[b].toInt() and 0xFF
+                    val low = rgb[b + 1].toInt() and 0xFF
+                    val v = (high shl 8) or low
                     pixels[p] = Color.rgb(
                         ((v shr 11) and 0x1F) * 255 / 31,
                         ((v shr 5) and 0x3F) * 255 / 63,
@@ -733,7 +746,8 @@ class MainActivity : AppCompatActivity() {
                     b += 2
                 }
                 clockBgCache = pixels
-                log("时钟背景读取完成")
+                saveClockBgToDisk(pixels)
+                log("时钟背景读取完成并已持久化缓存")
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -741,6 +755,50 @@ class MainActivity : AppCompatActivity() {
             } finally {
                 clockBgReading = false
             }
+        }
+    }
+
+    private fun loadClockBgFromDisk(): IntArray? {
+        val file = File(filesDir, "clock_bg_cache_v2.bin")
+        if (!file.exists() || file.length() != (Msu2Protocol.SCREEN_W * Msu2Protocol.SCREEN_H * 4).toLong()) {
+            return null
+        }
+        return try {
+            val total = Msu2Protocol.SCREEN_W * Msu2Protocol.SCREEN_H
+            val pixels = IntArray(total)
+            FileInputStream(file).use { fis ->
+                val bb = ByteBuffer.allocate(total * 4)
+                var read = 0
+                val buf = ByteArray(4096)
+                while (read < total * 4) {
+                    val n = fis.read(buf, 0, minOf(buf.size, total * 4 - read))
+                    if (n <= 0) break
+                    bb.put(buf, 0, n)
+                    read += n
+                }
+                if (read == total * 4) {
+                    bb.flip()
+                    bb.asIntBuffer().get(pixels)
+                    pixels
+                } else {
+                    null
+                }
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun saveClockBgToDisk(pixels: IntArray) {
+        try {
+            val file = File(filesDir, "clock_bg_cache_v2.bin")
+            FileOutputStream(file).use { fos ->
+                val bb = ByteBuffer.allocate(pixels.size * 4)
+                bb.asIntBuffer().put(pixels)
+                fos.write(bb.array())
+                fos.flush()
+            }
+        } catch (_: Exception) {
         }
     }
 
@@ -945,6 +1003,11 @@ class MainActivity : AppCompatActivity() {
             log("未连接设备，无法烧录")
             return
         }
+        runOnUiThread {
+            binding.layoutFlashProgress.visibility = View.VISIBLE
+            binding.pbFlash.progress = 0
+            binding.tvFlashProgress.text = "准备烧录…"
+        }
         when (flashKind) {
             FlashKind.GIF -> flashGif(s, uri)
             FlashKind.PHOTO -> {
@@ -988,8 +1051,10 @@ class MainActivity : AppCompatActivity() {
                     onProgress = { done, total -> runOnUiThread { renderProgress(done, total) } }
                 )
             } catch (e: CancellationException) {
+                runOnUiThread { binding.layoutFlashProgress.visibility = View.GONE }
                 throw e
             } catch (e: Exception) {
+                runOnUiThread { binding.layoutFlashProgress.visibility = View.GONE }
                 log("GIF 烧录失败：${e.message}")
                 runCatching { s.drain() }
                 if (e is SerialTimeoutException) {
@@ -1113,8 +1178,10 @@ class MainActivity : AppCompatActivity() {
                     }
                 )
             } catch (e: CancellationException) {
+                runOnUiThread { binding.layoutFlashProgress.visibility = View.GONE }
                 throw e
             } catch (e: Exception) {
+                runOnUiThread { binding.layoutFlashProgress.visibility = View.GONE }
                 log("烧录失败：${e.message}")
                 runCatching { s.drain() }
                 if (e is SerialTimeoutException) {
@@ -1146,12 +1213,31 @@ class MainActivity : AppCompatActivity() {
                     onProgress = { done, total -> runOnUiThread { renderProgress(done, total) } }
                 )
                 if (page == Msu2Protocol.PAGE_CLK_BG) {
-                    // 时钟背景已更新 丢弃旧缓存
-                    clockBgCache = null
+                    // 时钟背景已更新，将新烧录的像素直接更新至内存与磁盘缓存
+                    val w = Msu2Protocol.SCREEN_W
+                    val h = Msu2Protocol.SCREEN_H
+                    val pixels = IntArray(w * h)
+                    var b = 0
+                    for (p in pixels.indices) {
+                        val high = rgb[b].toInt() and 0xFF
+                        val low = rgb[b + 1].toInt() and 0xFF
+                        val v = (high shl 8) or low
+                        pixels[p] = Color.rgb(
+                            ((v shr 11) and 0x1F) * 255 / 31,
+                            ((v shr 5) and 0x3F) * 255 / 63,
+                            (v and 0x1F) * 255 / 31
+                        )
+                        b += 2
+                    }
+                    clockBgCache = pixels
+                    saveClockBgToDisk(pixels)
+                    log("时钟背景缓存已同步更新")
                 }
             } catch (e: CancellationException) {
+                runOnUiThread { binding.layoutFlashProgress.visibility = View.GONE }
                 throw e
             } catch (e: Exception) {
+                runOnUiThread { binding.layoutFlashProgress.visibility = View.GONE }
                 log("图片烧录失败：${e.message}")
                 runCatching { s.drain() }
                 if (e is SerialTimeoutException) {
@@ -1790,11 +1876,24 @@ class MainActivity : AppCompatActivity() {
     private fun renderProgress(done: Int, total: Int) {
         val doneFinal = done >= total
         val now = SystemClock.elapsedRealtime()
-        // 未完成时限制刷新频率
+        val pct = if (total <= 0) 100 else done * 100 / total
+
+        // 同步更新烧录按钮下方的线性进度条
+        binding.layoutFlashProgress.visibility = View.VISIBLE
+        binding.pbFlash.progress = pct
+        binding.tvFlashProgress.text = "$pct% ($done/$total 页)"
+        if (doneFinal) {
+            binding.layoutFlashProgress.postDelayed({
+                if (progressDone) {
+                    binding.layoutFlashProgress.visibility = View.GONE
+                }
+            }, 3000)
+        }
+
+        // 未完成时限制日志刷新频率
         if (!doneFinal && now - lastProgressRender < 200) return
         lastProgressRender = now
 
-        val pct = if (total <= 0) 100 else done * 100 / total
         val width = 20
         val filled = pct * width / 100
         val bar = "█".repeat(filled) + "░".repeat(width - filled)
