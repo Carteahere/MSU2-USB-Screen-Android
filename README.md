@@ -81,7 +81,7 @@ app/src/main/java/com/msu2/android/
 
 app
 
-<img width="600" height="682" alt="app" src="https://github.com/user-attachments/assets/d394460c-e747-456e-a782-3bd11aae4a59" />
+<img width="600" height="680" alt="app" src="https://github.com/user-attachments/assets/aca8b2e1-ee1d-4381-a2ae-d2bdaa4a42e0" />
 
 
 时间
