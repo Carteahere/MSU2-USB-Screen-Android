@@ -14,6 +14,7 @@ import android.graphics.Color
 import android.graphics.Movie
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.Typeface
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.media.projection.MediaProjectionManager
@@ -22,18 +23,14 @@ import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
 import android.text.Editable
-import android.text.InputType
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
-import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.PopupWindow
-import android.widget.RadioGroup
 import android.widget.ScrollView
-import android.widget.SeekBar
 import android.widget.TextView
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -41,6 +38,8 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.updatePadding
+import androidx.core.widget.doAfterTextChanged
 import com.google.android.material.color.DynamicColors
 import com.google.android.material.color.MaterialColors
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
@@ -85,11 +84,21 @@ class MainActivity : AppCompatActivity() {
         private const val VID = 0x1A86
         private const val PID = 0xFE0C
         private const val ACTION_USB_PERMISSION = "com.msu2.android.USB_PERMISSION"
-        private const val REPO_URL = "https://github.com/SadYuyuko/MSU2-USB-Screen-Android"
+        private const val REPO_URL = "https://github.com/Carteahere/MSU2-USB-Screen-Android"
         private const val RELEASES_URL = "$REPO_URL/releases"
-        private const val LATEST_RELEASE_API = "https://api.github.com/repos/SadYuyuko/MSU2-USB-Screen-Android/releases/latest"
-        /** 投屏授权等待上限 */
+        private const val LATEST_RELEASE_API = "https://api.github.com/repos/Carteahere/MSU2-USB-Screen-Android/releases/latest"
+        // 投屏授权等待上限
         private const val PROJECTION_WAIT_MS = 180000L
+
+        // 时钟显示模式
+        private const val CLOCK_MODE_HM = 0
+        private const val CLOCK_MODE_SEC = 1
+        private const val CLOCK_MODE_MS = 2
+
+        // 网速默认颜色 RGB565 文字橙 上传红粉 下载青
+        private const val NET_TEXT_DEF = 0xFC00
+        private const val NET_UPLOAD_DEF = 0xE851
+        private const val NET_DOWNLOAD_DEF = 0x969B
     }
 
     private lateinit var binding: ActivityMainBinding
@@ -108,9 +117,13 @@ class MainActivity : AppCompatActivity() {
     @Volatile private var projectionGranted = false
     @Volatile private var flashing = false
     @Volatile private var lcdState = 0
-    /** 旋转请求 */
+    // 旋转请求
     @Volatile private var rotatePending = false
     @Volatile private var clockColorChanged = false
+    @Volatile private var clockModeChanged = false
+    // 时钟背景页缓存 RGB 解码后像素 供秒 毫秒模式合成
+    @Volatile private var clockBgCache: IntArray? = null
+    @Volatile private var clockBgReading = false
     @Volatile private var projectionDeferred: CompletableDeferred<Boolean>? = null
     @Volatile private var permissionContinuation: kotlin.coroutines.Continuation<Boolean>? = null
     private var mirrorInfoLogged = false
@@ -191,8 +204,29 @@ class MainActivity : AppCompatActivity() {
         binding.btnRotate.setOnClickListener { rotateDisplay() }
         binding.btnStatePrev.setOnClickListener { keyEventPrev = true }
         binding.btnStateNext.setOnClickListener { keyEvent = true }
-        binding.btnFlash.setOnClickListener { showFlashDialog() }
         binding.btnMenu.setOnClickListener { showOverflowMenu(it) }
+        binding.btnClearLog.setOnClickListener {
+            binding.tvLog.text = ""
+            progressStart = -1
+            progressDone = false
+        }
+        binding.btnCopyLog.setOnClickListener {
+            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("MSU2 Log", binding.tvLog.text))
+            android.widget.Toast.makeText(this, R.string.log_copied, android.widget.Toast.LENGTH_SHORT).show()
+        }
+        binding.bottomNav.setOnItemSelectedListener { item ->
+            when (item.itemId) {
+                R.id.nav_home -> { switchPage(0); true }
+                R.id.nav_custom -> { switchPage(1); true }
+                R.id.nav_flash -> { switchPage(2); true }
+                else -> false
+            }
+        }
+        setupCustomPage()
+        setupFlashPage()
+
+        // 当前模式键 主色半透明 比其余按键浅一档
 
         MirrorService.MirrorBus.onError = { msg ->
             log("镜像: $msg")
@@ -235,16 +269,28 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** 沉浸式边距 */
+    // 沉浸式边距 TopAppBar 避开状态栏 刘海 底栏避开导航栏
     private fun applyWindowInsets() {
-        val pad = (12 * resources.displayMetrics.density).toInt()
-        ViewCompat.setOnApplyWindowInsetsListener(binding.root) { v, insets ->
+        ViewCompat.setOnApplyWindowInsetsListener(binding.root) { _, insets ->
             val bars = insets.getInsets(
                 WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
             )
-            v.setPadding(bars.left + pad, bars.top + pad, bars.right + pad, bars.bottom + pad)
+            // 仅在容器四周追加安全区 不改 Toolbar 内部布局 避免标题 菜单被裁切
+            binding.topBarContainer.updatePadding(
+                left = bars.left,
+                top = bars.top,
+                right = bars.right
+            )
+            binding.bottomNav.setPadding(bars.left, 0, bars.right, bars.bottom)
             insets
         }
+    }
+
+    // 底栏切换页面 0 首页 1 自定义 2 烧录
+    private fun switchPage(index: Int) {
+        binding.pageHome.visibility = if (index == 0) View.VISIBLE else View.GONE
+        binding.pageCustom.visibility = if (index == 1) View.VISIBLE else View.GONE
+        binding.pageFlash.visibility = if (index == 2) View.VISIBLE else View.GONE
     }
 
     override fun onDestroy() {
@@ -255,7 +301,7 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
     }
 
-    // 连接 / 断开
+    // 连接 断开
 
     private fun connect() {
         if (connected) return
@@ -340,6 +386,8 @@ class MainActivity : AppCompatActivity() {
             serial = null
             currentDeviceId = -1
             connectJob = null
+            clockBgCache = null
+            clockBgReading = false
             updateStatus(getString(R.string.status_disconnected))
             resetStateLabel()
         }
@@ -373,7 +421,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** 旋转键置请求位 */
+    // 旋转键置请求位
     private fun rotateDisplay() {
         if (serial == null) {
             log(getString(R.string.no_device))
@@ -396,6 +444,8 @@ class MainActivity : AppCompatActivity() {
         serial?.close()
         serial = null
         currentDeviceId = -1
+        clockBgCache = null
+        clockBgReading = false
     }
 
     private fun onDeviceDetached() {
@@ -439,10 +489,10 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** 有待处理的重绘请求时返回 true */
+    // 有待处理的重绘请求时返回 true
     private fun inputPending(): Boolean = keyEvent || keyEventPrev || rotatePending
 
-    /** 分段延时，收到重绘请求立即返回 */
+    // 分段延时 收到重绘请求立即返回
     private suspend fun delayInterruptible(ms: Long) {
         var remaining = ms
         while (remaining > 0) {
@@ -498,7 +548,11 @@ class MainActivity : AppCompatActivity() {
                 log("状态切换 -> ${stateNames[state]}")
                 updateStateLabel(state)
             }
-            if (clockColorChanged) { clockColorChanged = false; stateChanged = true }
+            if (clockColorChanged || clockModeChanged) {
+                clockColorChanged = false
+                clockModeChanged = false
+                stateChanged = true
+            }
             try {
                 when (state) {
                     0 -> { // GIF 动图
@@ -532,7 +586,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** 手机状态显示 */
+    // 手机状态显示
     private suspend fun showPhoneStatus(s: Msu2Serial, fc: Int, stateChanged: Boolean) {
         val numAdd = Msu2Protocol.PAGE_N24X33
         val bc = Msu2Protocol.BLACK
@@ -552,16 +606,16 @@ class MainActivity : AppCompatActivity() {
         val bat = StatusProvider.batteryPercent(this)
         val frq = StatusProvider.storageUsage(this)
 
-        drawN24(s, fc, bc, numAdd, 24, 0, cpu)      // CPU 左上
+        drawN24(s, fc, bc, numAdd, 24, 0, cpu) // CPU 左上
         if (inputPending()) return
-        drawN24(s, fc, bc, numAdd, 104, 0, mem)     // 内存 右上
+        drawN24(s, fc, bc, numAdd, 104, 0, mem) // 内存 右上
         if (inputPending()) return
-        drawN24(s, fc, bc, numAdd, 104, 47, bat)    // 电量 右下
+        drawN24(s, fc, bc, numAdd, 104, 47, bat) // 电量 右下
         if (inputPending()) return
-        drawN24(s, fc, bc, numAdd, 24, 47, frq)     // 存储 左下
+        drawN24(s, fc, bc, numAdd, 24, 47, frq) // 存储 左下
     }
 
-    /** 一组 N24X33 数码管 */
+    // 一组 N24X33 数码管
     private suspend fun drawN24(s: Msu2Serial, fc: Int, bc: Int, numAdd: Int, x: Int, y: Int, value: Int) {
         var v = value
         if (v >= 100) { s.ack(Msu2Protocol.lcdPhotoWb(x, y, 8, 33, 10 + numAdd, fc, bc)); v %= 100 }
@@ -572,8 +626,17 @@ class MainActivity : AppCompatActivity() {
         s.ack(Msu2Protocol.lcdPhotoWb(x + 32, y, 24, 33, v % 10 + numAdd, fc, bc))
     }
 
-    /** 时钟显示 */
+    // 时钟显示 按时钟模式分派
     private suspend fun showClock(s: Msu2Serial, stateChanged: Boolean) {
+        when (getClockMode()) {
+            CLOCK_MODE_SEC -> showClockCanvas(s, stateChanged, showMs = false)
+            CLOCK_MODE_MS -> showClockCanvas(s, stateChanged, showMs = true)
+            else -> showClockHM(s, stateChanged)
+        }
+    }
+
+    // 时 分 模式 硬件字库 + 背景页
+    private suspend fun showClockHM(s: Msu2Serial, stateChanged: Boolean) {
         val fc = getClockColor()
         val photoAdd = Msu2Protocol.PAGE_CLK_BG
         val numAdd = Msu2Protocol.PAGE_ASC64
@@ -596,7 +659,92 @@ class MainActivity : AppCompatActivity() {
         delayInterruptible(200)
     }
 
-    /** 网速显示 */
+    // 时 分 秒 毫秒 模式 整屏位图合成 背景页 + 数字
+    private suspend fun showClockCanvas(s: Msu2Serial, stateChanged: Boolean, showMs: Boolean) {
+        val w = Msu2Protocol.SCREEN_W
+        val h = Msu2Protocol.SCREEN_H
+        if (stateChanged) {
+            // 先按普通时间方式铺背景页
+            s.ack(Msu2Protocol.lcdPhoto(0, 0, w, h, Msu2Protocol.PAGE_CLK_BG))
+            if (inputPending()) return
+        }
+        val cache = clockBgCache
+        if (cache == null) startClockBgRead(s)
+        val now = LocalTime.now()
+        val c888 = rgb565To888(getClockColor())
+        val textPaint = Paint().apply {
+            isAntiAlias = true
+            color = Color.rgb(c888.first, c888.second, c888.third)
+            typeface = Typeface.MONOSPACE
+            textAlign = Paint.Align.CENTER
+        }
+        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        if (cache != null) {
+            // 真实背景 + 数字叠加
+            bmp.setPixels(cache, 0, w, 0, 0, w, h)
+        } else {
+            // 背景尚未读取完成 临时黑底显示
+            bmp.eraseColor(Color.BLACK)
+        }
+        val canvas = Canvas(bmp)
+        val timeText = "%02d:%02d:%02d".format(now.hour, now.minute, now.second)
+        if (showMs) {
+            textPaint.textSize = 28f
+            canvas.drawText(timeText, w / 2f, 34f, textPaint)
+            textPaint.textSize = 18f
+            canvas.drawText(".%03d".format(now.nano / 1_000_000), w / 2f, 64f, textPaint)
+        } else {
+            textPaint.textSize = 32f
+            val fm = textPaint.fontMetrics
+            val baseline = (h - (fm.descent - fm.ascent)) / 2f - fm.ascent
+            canvas.drawText(timeText, w / 2f, baseline, textPaint)
+        }
+        sendBitmapFrame(s, bmp)
+        delayInterruptible(if (showMs) 50 else 100)
+    }
+
+    // 后台逐字节读取时钟背景 Flash 页并缓存 供秒 毫秒模式整屏合成
+    private fun startClockBgRead(s: Msu2Serial) {
+        if (clockBgReading) return
+        clockBgReading = true
+        scope.launch {
+            try {
+                log("正在读取时钟背景…")
+                val w = Msu2Protocol.SCREEN_W
+                val h = Msu2Protocol.SCREEN_H
+                val base = Msu2Protocol.PAGE_CLK_BG * 256
+                val rgb = ByteArray(w * h * 2)
+                var i = 0
+                while (i < rgb.size) {
+                    if (!connected) return@launch
+                    rgb[i] = s.readFlash(base + i).toByte()
+                    i++
+                }
+                if (!connected) return@launch
+                val pixels = IntArray(w * h)
+                var b = 0
+                for (p in pixels.indices) {
+                    val v = ((rgb[b + 1].toInt() and 0xFF) shl 8) or (rgb[b].toInt() and 0xFF)
+                    pixels[p] = Color.rgb(
+                        ((v shr 11) and 0x1F) * 255 / 31,
+                        ((v shr 5) and 0x3F) * 255 / 63,
+                        (v and 0x1F) * 255 / 31
+                    )
+                    b += 2
+                }
+                clockBgCache = pixels
+                log("时钟背景读取完成")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                log("读取时钟背景失败：${e.message}")
+            } finally {
+                clockBgReading = false
+            }
+        }
+    }
+
+    // 网速显示
     private suspend fun showNetSpeed(s: Msu2Serial, stateChanged: Boolean) {
         if (stateChanged) {
             val (rx, tx) = StatusProvider.netCounters()
@@ -624,22 +772,18 @@ class MainActivity : AppCompatActivity() {
         canvas.drawColor(Color.BLACK)
         val textPaint = Paint().apply {
             isAntiAlias = true
-            color = Color.rgb(255, 128, 0)
+            color = netColor("net_text_color", NET_TEXT_DEF)
             textSize = 20f
         }
         canvas.drawText("上传  ${formatSpeed(sent).padStart(8)}", 0f, 18f, textPaint)
         canvas.drawText("下载  ${formatSpeed(recv).padStart(8)}", 0f, 58f, textPaint)
-        drawNetLines(canvas, netSpeedPlot.map { it.first }, 39, Color.rgb(235, 139, 139))
-        drawNetLines(canvas, netSpeedPlot.map { it.second }, 79, Color.rgb(146, 211, 217))
-        val rgb = ByteArray(w * h * 2)
-        bitmapToRgb565(bmp, rgb)
-        bmp.recycle()
-        val data = Msu2Protocol.encodeScreenData(rgb, w, h)
-        s.sendScreen(Msu2Protocol.lcdLoadAddr(0, 0, w, h) + data) { inputPending() }
+        drawNetLines(canvas, netSpeedPlot.map { it.first }, 39, netColor("net_upload_color", NET_UPLOAD_DEF))
+        drawNetLines(canvas, netSpeedPlot.map { it.second }, 79, netColor("net_download_color", NET_DOWNLOAD_DEF))
+        sendBitmapFrame(s, bmp)
         delayInterruptible(1000)
     }
 
-    /** 网速曲线：量程≈当前最大网速，每点 2px、取最近 80 点，线下填充 */
+    // 网速曲线 量程≈当前最大网速 每点 2px 取最近 80 点 线下填充
     private fun drawNetLines(canvas: Canvas, values: List<Double>, baselineY: Int, color: Int) {
         val recent = values.takeLast(80)
         if (recent.isEmpty()) return
@@ -680,7 +824,7 @@ class MainActivity : AppCompatActivity() {
         canvas.restore()
     }
 
-    /** 网速格式化 */
+    // 网速格式化
     private fun formatSpeed(num: Double): String {
         val kb = num / 1024.0
         val mb = kb / 1024.0
@@ -692,7 +836,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** 屏幕镜像 */
+    // 屏幕镜像
     private suspend fun showMirror(s: Msu2Serial) {
         if (!projectionGranted) {
             val ok = requestProjection()
@@ -750,64 +894,49 @@ class MainActivity : AppCompatActivity() {
 
     private enum class FlashKind { GIF, PHOTO, BIN }
 
-    @Volatile private var flashKind: FlashKind = FlashKind.BIN
+    @Volatile private var flashKind: FlashKind = FlashKind.GIF
 
     private fun dp(v: Float): Int = (v * resources.displayMetrics.density).toInt()
 
-    /** 构建 Material 风格纵向单选组 */
-    private fun materialRadioGroup(options: List<String>): RadioGroup {
-        return RadioGroup(this).apply {
-            orientation = RadioGroup.VERTICAL
-            options.forEachIndexed { i, text ->
-                val rb = com.google.android.material.radiobutton.MaterialRadioButton(this@MainActivity).apply {
-                    this.text = text
-                    textSize = 16f
-                }
-                val lp = RadioGroup.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                )
-                if (i < options.size - 1) lp.bottomMargin = dp(8f)
-                rb.layoutParams = lp
-                addView(rb)
-            }
-            if (childCount > 0) check(getChildAt(0).id)
+    // ── 烧录页 ──
+
+    private fun setupFlashPage() {
+        binding.rgKind.setOnCheckedChangeListener { _, _ -> updateFlashSections() }
+        binding.btnPickFlash.setOnClickListener { pickFlashFile() }
+        val selectTarget = { rb: com.google.android.material.radiobutton.MaterialRadioButton ->
+            binding.rbTargetClock.isChecked = rb === binding.rbTargetClock
+            binding.rbTargetPhoto.isChecked = rb === binding.rbTargetPhoto
+            binding.rbTargetCustom.isChecked = rb === binding.rbTargetCustom
+            binding.etCustomPage.isEnabled = rb === binding.rbTargetCustom
         }
+        binding.rbTargetClock.setOnCheckedChangeListener { _, c -> if (c) selectTarget(binding.rbTargetClock) }
+        binding.rbTargetPhoto.setOnCheckedChangeListener { _, c -> if (c) selectTarget(binding.rbTargetPhoto) }
+        binding.rbTargetCustom.setOnCheckedChangeListener { _, c -> if (c) selectTarget(binding.rbTargetCustom) }
+        updateFlashSections()
     }
 
-    /** 单选组中被选中项的下标 */
-    private fun RadioGroup.checkedIndex(): Int =
-        (0 until childCount).firstOrNull { getChildAt(it).id == checkedRadioButtonId } ?: 0
+    // 按素材类型展开对应设置
+    private fun updateFlashSections() {
+        binding.sectionImageTarget.visibility =
+            if (currentFlashKind() == FlashKind.PHOTO) View.VISIBLE else View.GONE
+        binding.sectionBinParams.visibility =
+            if (currentFlashKind() == FlashKind.BIN) View.VISIBLE else View.GONE
+    }
 
-    private fun showFlashDialog() {
-        // GIF / 图片 / 固件
-        val group = materialRadioGroup(
-            listOf(
-                getString(R.string.flash_kind_gif),
-                getString(R.string.flash_kind_photo),
-                getString(R.string.flash_kind_bin)
-            )
-        )
-        // Material 对话框内边距
-        group.setPadding(dp(24f), dp(8f), dp(24f), dp(8f))
-        MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.flash_title)
-            .setView(group)
-            .setPositiveButton(R.string.flash_confirm) { _, _ ->
-                flashKind = when (group.checkedIndex()) {
-                    0 -> FlashKind.GIF
-                    1 -> FlashKind.PHOTO
-                    else -> FlashKind.BIN
-                }
-                val mime = when (flashKind) {
-                    FlashKind.GIF -> arrayOf("image/gif")
-                    FlashKind.PHOTO -> arrayOf("image/*")
-                    FlashKind.BIN -> arrayOf("application/octet-stream", "application/x-binary", "*/*")
-                }
-                flashFileLauncher.launch(mime)
-            }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
+    private fun currentFlashKind(): FlashKind = when (binding.rgKind.checkedRadioButtonId) {
+        R.id.rb_kind_photo -> FlashKind.PHOTO
+        R.id.rb_kind_bin -> FlashKind.BIN
+        else -> FlashKind.GIF
+    }
+
+    private fun pickFlashFile() {
+        flashKind = currentFlashKind()
+        val mime = when (flashKind) {
+            FlashKind.GIF -> arrayOf("image/gif")
+            FlashKind.PHOTO -> arrayOf("image/*")
+            FlashKind.BIN -> arrayOf("application/octet-stream", "application/x-binary", "*/*")
+        }
+        flashFileLauncher.launch(mime)
     }
 
     private fun startFlash(uri: Uri) {
@@ -818,12 +947,23 @@ class MainActivity : AppCompatActivity() {
         }
         when (flashKind) {
             FlashKind.GIF -> flashGif(s, uri)
-            FlashKind.PHOTO -> showImageTargetDialog(s, uri)
-            FlashKind.BIN -> showBinFlashDialog(s, uri)
+            FlashKind.PHOTO -> {
+                val page = when {
+                    binding.rbTargetPhoto.isChecked -> 3926
+                    binding.rbTargetCustom.isChecked -> binding.etCustomPage.text.toString().toIntOrNull() ?: 0
+                    else -> 3826
+                }
+                flashImageTo(s, uri, page)
+            }
+            FlashKind.BIN -> flashBin(
+                s, uri,
+                binding.etBinPage.text.toString().toIntOrNull() ?: 0,
+                binding.rbBinZk.isChecked
+            )
         }
     }
 
-    /** 烧录 GIF：解码动画 GIF 前 36 帧，缩放裁剪到 160x80，按帧烧录到页 0/100/.../3500 */
+    // 烧录 GIF 解码动画 GIF 前 36 帧 缩放裁剪到 160x80 按帧烧录到页 0 100 3500
     private fun flashGif(s: Msu2Serial, uri: Uri) {
         scope.launch {
             flashing = true
@@ -861,7 +1001,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** 解码动画 GIF：按帧解析帧时间表，按帧率均匀取 36 帧，每帧缩放裁剪到 160x80 */
+    // 解码动画 GIF 按帧解析帧时间表 按帧率均匀取 36 帧 每帧缩放裁剪到 160x80
     private fun decodeGifFrames(uri: Uri): List<Bitmap> {
         val movie = contentResolver.openInputStream(uri)?.use { Movie.decodeStream(it) }
             ?: throw IllegalStateException("无法解码 GIF（请确认是动画 GIF）")
@@ -892,7 +1032,7 @@ class MainActivity : AppCompatActivity() {
         return frames
     }
 
-    /** 解析 GIF 每帧起始时间 */
+    // 解析 GIF 每帧起始时间
     private fun parseGifFrameTimes(uri: Uri): LongArray? {
         return try {
             val data = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return null
@@ -943,7 +1083,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** 跳过子块序列 */
+    // 跳过子块序列
     private fun skipSubBlocks(data: ByteArray, start: Int): Int {
         var p = start
         while (p < data.size) {
@@ -955,68 +1095,35 @@ class MainActivity : AppCompatActivity() {
         return p
     }
 
-    /** 图片类弹框选择目标页 */
-    private fun showImageTargetDialog(s: Msu2Serial, uri: Uri) {
-        val rbClock = com.google.android.material.radiobutton.MaterialRadioButton(this).apply {
-            text = getString(R.string.flash_target_clock)
-            textSize = 16f
-        }
-        val rbPhoto = com.google.android.material.radiobutton.MaterialRadioButton(this).apply {
-            text = getString(R.string.flash_target_photo)
-            textSize = 16f
-        }
-        val rbCustom = com.google.android.material.radiobutton.MaterialRadioButton(this).apply {
-            text = getString(R.string.flash_target_custom)
-            textSize = 16f
-        }
-        val pageInput = EditText(this).apply {
-            inputType = InputType.TYPE_CLASS_NUMBER
-            hint = "页号"
-            width = dp(96f)
-            isEnabled = false
-        }
-        // 手动管理互斥
-        fun select(rb: android.widget.RadioButton) {
-            rbClock.isChecked = rb === rbClock
-            rbPhoto.isChecked = rb === rbPhoto
-            rbCustom.isChecked = rb === rbCustom
-            pageInput.isEnabled = rb === rbCustom
-        }
-        rbClock.setOnCheckedChangeListener { _, c -> if (c) select(rbClock) }
-        rbPhoto.setOnCheckedChangeListener { _, c -> if (c) select(rbPhoto) }
-        rbCustom.setOnCheckedChangeListener { _, c -> if (c) select(rbCustom) }
-        rbClock.isChecked = true
-
-        // 自定义页布局
-        val customRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            addView(rbCustom)
-            addView(pageInput, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { marginStart = dp(8f) })
-        }
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(24f), dp(8f), dp(24f), dp(8f))
-            addView(rbClock, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-            addView(rbPhoto, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8f) })
-            addView(customRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8f) })
-        }
-        MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.flash_target_title)
-            .setView(container)
-            .setPositiveButton(R.string.flash_confirm) { _, _ ->
-                val page = when {
-                    rbPhoto.isChecked -> 3926
-                    rbCustom.isChecked -> pageInput.text.toString().toIntOrNull() ?: 0
-                    else -> 3826
+    // 固件类烧录 起始页与类型取自烧录页设置
+    private fun flashBin(s: Msu2Serial, uri: Uri, page: Int, zk: Boolean) {
+        scope.launch {
+            flashing = true
+            try {
+                progressDone = false
+                progressStart = -1
+                log("开始烧录 $uri …")
+                val data = contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    ?: throw IllegalStateException("无法读取文件")
+                FlashWriter().flash(
+                    s, data, page, zk,
+                    onLog = { log(it) },
+                    onProgress = { done, total ->
+                        runOnUiThread { renderProgress(done, total) }
+                    }
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                log("烧录失败：${e.message}")
+                runCatching { s.drain() }
+                if (e is SerialTimeoutException) {
+                    log("提示：MSU2 未在预期时间内响应。若设备已卡死，请重新插拔 MSU2 后重试")
                 }
-                flashImageTo(s, uri, page)
+            } finally {
+                flashing = false
             }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
+        }
     }
 
     private fun flashImageTo(s: Msu2Serial, uri: Uri, page: Int) {
@@ -1038,6 +1145,10 @@ class MainActivity : AppCompatActivity() {
                     onLog = { log(it) },
                     onProgress = { done, total -> runOnUiThread { renderProgress(done, total) } }
                 )
+                if (page == Msu2Protocol.PAGE_CLK_BG) {
+                    // 时钟背景已更新 丢弃旧缓存
+                    clockBgCache = null
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -1052,66 +1163,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** 固件类保持原有流程 */
-    private fun showBinFlashDialog(s: Msu2Serial, uri: Uri) {
-        val pageInput = EditText(this).apply {
-            inputType = InputType.TYPE_CLASS_NUMBER
-            hint = "起始页（0 - 4095）"
-        }
-        val rbGroup = materialRadioGroup(
-            listOf(
-                getString(R.string.flash_type_photo),
-                getString(R.string.flash_type_zk)
-            )
-        )
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(24f), dp(8f), dp(24f), dp(8f))
-            addView(pageInput)
-            addView(rbGroup, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = dp(12f) })
-        }
-        MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.flash_params_title)
-            .setView(container)
-            .setPositiveButton(android.R.string.ok) { _, _ ->
-                val page = pageInput.text.toString().toIntOrNull() ?: 0
-                val zk = rbGroup.checkedIndex() == 1
-                scope.launch {
-                    flashing = true
-                    try {
-                        progressDone = false
-                        progressStart = -1
-                        log("开始烧录 $uri …")
-                        val data = contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                            ?: throw IllegalStateException("无法读取文件")
-                        FlashWriter().flash(
-                            s, data, page, zk,
-                            onLog = { log(it) },
-                            onProgress = { done, total ->
-                                runOnUiThread { renderProgress(done, total) }
-                            }
-                        )
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        log("烧录失败：${e.message}")
-                        runCatching { s.drain() }
-                        if (e is SerialTimeoutException) {
-                            log("提示：MSU2 未在预期时间内响应。若设备已卡死，请重新插拔 MSU2 后重试")
-                        }
-                    } finally {
-                        flashing = false
-                    }
-                }
-            }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
-    }
-
-    /** 解码图片 */
+    // 解码图片
     private fun decodeImage(uri: Uri): Bitmap {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
@@ -1122,7 +1174,7 @@ class MainActivity : AppCompatActivity() {
             ?: throw IllegalStateException("无法解析图片")
     }
 
-    /** 按 V1.6 方式缩放并中心裁剪到 160x80 */
+    // 按 V1 6 方式缩放并中心裁剪到 160x80
     private fun resizeTo160x80(src: Bitmap): Bitmap {
         val sw = src.width
         val sh = src.height
@@ -1137,7 +1189,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** 将位图转成 RGB565 字节 */
+    // 将位图转成 RGB565 字节
     private fun bitmapToRgb565(bmp: Bitmap, out: ByteArray) {
         val w = bmp.width
         val h = bmp.height
@@ -1146,7 +1198,19 @@ class MainActivity : AppCompatActivity() {
         Msu2Protocol.rgb565Bytes(pixels, w, h, w, out)
     }
 
-    // 菜单 / 关于 / 更新
+    // 将位图编码后发送到副屏指定区域
+    private suspend fun sendBitmapFrame(s: Msu2Serial, bmp: Bitmap, x: Int = 0, y: Int = 0) {
+        val w = bmp.width
+        val h = bmp.height
+        val rgb = ByteArray(w * h * 2)
+        bitmapToRgb565(bmp, rgb)
+        bmp.recycle()
+        s.sendScreen(Msu2Protocol.lcdLoadAddr(x, y, w, h) + Msu2Protocol.encodeScreenData(rgb, w, h)) {
+            inputPending()
+        }
+    }
+
+    // 菜单 关于 更新
 
     private fun showOverflowMenu(anchor: View) {
         val d = resources.displayMetrics.density
@@ -1154,12 +1218,15 @@ class MainActivity : AppCompatActivity() {
         val menuView = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = MaterialShapeDrawable().apply {
-                setTint(MaterialColors.getColor(this@MainActivity, com.google.android.material.R.attr.colorSurface, Color.WHITE))
+                setTint(MaterialColors.getColor(this@MainActivity, com.google.android.material.R.attr.colorSurfaceContainer, Color.WHITE))
                 shapeAppearanceModel = shapeAppearanceModel.toBuilder()
-                    .setAllCorners(CornerFamily.ROUNDED, 4 * d)
+                    .setAllCorners(CornerFamily.ROUNDED, 12 * d)
                     .build()
+                elevation = 6 * d
             }
             outlineProvider = ViewOutlineProvider.BACKGROUND
+            elevation = 6 * d
+            setPadding(0, (4 * d).toInt(), 0, (4 * d).toInt())
         }
 
         val popup = PopupWindow(
@@ -1170,13 +1237,9 @@ class MainActivity : AppCompatActivity() {
         ).apply {
             isOutsideTouchable = true
             isFocusable = true
-            elevation = 4 * d
+            elevation = 6 * d
         }
 
-        menuView.addView(menuRow(getString(R.string.menu_time)) {
-            popup.dismiss()
-            showClockColorDialog()
-        })
         menuView.addView(menuRow(getString(R.string.menu_update)) {
             popup.dismiss()
             checkUpdate()
@@ -1186,18 +1249,14 @@ class MainActivity : AppCompatActivity() {
             showAboutDialog()
         })
 
-        // 面板宽为内容宽一点五倍
-        menuView.measure(
-            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
-            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
-        )
-        popup.setWidth((menuView.measuredWidth * 1.5).toInt())
+        // 适应 2 个汉字的适中宽度 2字宽度 + 左右内边距
+        popup.width = (72 * d).toInt()
 
         // 面板右缘对齐按钮
-        popup.showAsDropDown(anchor, 0, 0, Gravity.END)
+        popup.showAsDropDown(anchor, 0, (4 * d).toInt(), Gravity.END)
     }
 
-    /** 菜单行：文字居中，带按压反馈 */
+    // 菜单行 文字居中 紧凑边距
     private fun menuRow(label: String, onClick: () -> Unit): TextView {
         val d = resources.displayMetrics.density
         val ripple = TypedValue()
@@ -1205,9 +1264,9 @@ class MainActivity : AppCompatActivity() {
             if (theme.resolveAttribute(android.R.attr.selectableItemBackground, ripple, true)) ripple.resourceId else 0
         return TextView(this).apply {
             text = label
-            textSize = 16f
+            textSize = 15f
             setTextColor(MaterialColors.getColor(this@MainActivity, com.google.android.material.R.attr.colorOnSurface, Color.WHITE))
-            height = (48 * d).toInt()
+            height = (44 * d).toInt()
             gravity = Gravity.CENTER
             setPadding((16 * d).toInt(), 0, (16 * d).toInt(), 0)
             layoutParams = LinearLayout.LayoutParams(
@@ -1227,16 +1286,26 @@ class MainActivity : AppCompatActivity() {
     private fun getClockColor(): Int =
         prefs().getInt("clock_digit_color", 0xFFFF.toInt())
 
+    private fun getClockMode(): Int =
+        prefs().getInt("clock_mode", CLOCK_MODE_HM)
+
+    private fun saveClockMode(mode: Int) {
+        prefs().edit().putInt("clock_mode", mode).apply()
+        clockModeChanged = true
+    }
+
+    // 读取 RGB565 偏好颜色并展开为可绘制颜色
+    private fun netColor(key: String, def: Int): Int {
+        val c = rgb565To888(prefs().getInt(key, def))
+        return Color.rgb(c.first, c.second, c.third)
+    }
+
     private fun saveClockColor(color: Int) {
         prefs().edit().putInt("clock_digit_color", color).apply()
         clockColorChanged = true
     }
 
-    /** 将 RGB888 转换为 RGB565 */
-    private fun rgb888To565(r8: Int, g8: Int, b8: Int): Int =
-        ((r8 shr 3) shl 11) or ((g8 shr 2) shl 5) or (b8 shr 3)
-
-    /** 将 RGB565 拆为 RGB888 */
+    // 将 RGB565 拆为 RGB888
     private fun rgb565To888(c: Int): Triple<Int, Int, Int> {
         val r = ((c shr 11) and 0x1F) * 255 / 31
         val g = ((c shr 5) and 0x3F) * 255 / 63
@@ -1246,10 +1315,109 @@ class MainActivity : AppCompatActivity() {
 
     private fun rgb565Hex(v: Int): String = "%04X".format(v)
 
-    /** 时钟颜色设置弹窗 */
-    private fun showClockColorDialog() {
+    // ── 自定义页 时间颜色 ──
+
+    private var customColor: Int = 0xFFFF
+    private var suppressHexWatch = false
+
+    // 初始化时间颜色设置 改动即时生效
+    private fun setupCustomPage() {
+        customColor = getClockColor()
+        binding.sliderR.addOnChangeListener { _, v, fromUser ->
+            if (fromUser) setColor((customColor and 0x07FF) or (v.toInt() shl 11))
+        }
+        binding.sliderG.addOnChangeListener { _, v, fromUser ->
+            if (fromUser) setColor((customColor and 0xF81F) or (v.toInt() shl 5))
+        }
+        binding.sliderB.addOnChangeListener { _, v, fromUser ->
+            if (fromUser) setColor((customColor and 0xFFE0) or v.toInt())
+        }
+        binding.etHex.doAfterTextChanged {
+            if (suppressHexWatch) return@doAfterTextChanged
+            val txt = it?.toString()?.trim()?.uppercase() ?: return@doAfterTextChanged
+            val v = txt.toLongOrNull(16)?.toInt() ?: return@doAfterTextChanged
+            if (v in 0..0xFFFF) setColor(v, updateHex = false)
+        }
+        binding.btnColorReset.setOnClickListener { setColor(0xFFFF) }
+
+        // 时钟显示模式 先恢复选中态再挂监听 避免启动时误存
+        binding.rgClockMode.check(
+            when (getClockMode()) {
+                CLOCK_MODE_SEC -> R.id.rb_clock_hms
+                CLOCK_MODE_MS -> R.id.rb_clock_ms
+                else -> R.id.rb_clock_hm
+            }
+        )
+        binding.rgClockMode.setOnCheckedChangeListener { _, id ->
+            saveClockMode(
+                when (id) {
+                    R.id.rb_clock_hms -> CLOCK_MODE_SEC
+                    R.id.rb_clock_ms -> CLOCK_MODE_MS
+                    else -> CLOCK_MODE_HM
+                }
+            )
+        }
+
+        // 网速颜色 点击行弹出选色器
+        fun bindNetColor(
+            row: View,
+            card: com.google.android.material.card.MaterialCardView,
+            key: String,
+            def: Int,
+            title: String
+        ) {
+            card.setCardBackgroundColor(netColor(key, def))
+            row.setOnClickListener {
+                showColorPickerDialog(title, prefs().getInt(key, def)) { v ->
+                    prefs().edit().putInt(key, v).apply()
+                    card.setCardBackgroundColor(netColor(key, def))
+                    binding.netColorPreview.refresh()
+                }
+            }
+        }
+        bindNetColor(binding.rowNetText, binding.swNetText, "net_text_color", NET_TEXT_DEF, getString(R.string.net_text_color))
+        bindNetColor(binding.rowNetUpload, binding.swNetUpload, "net_upload_color", NET_UPLOAD_DEF, getString(R.string.net_upload_color))
+        bindNetColor(binding.rowNetDownload, binding.swNetDownload, "net_download_color", NET_DOWNLOAD_DEF, getString(R.string.net_download_color))
+        binding.netColorPreview.colorsProvider = {
+            Triple(
+                netColor("net_text_color", NET_TEXT_DEF),
+                netColor("net_upload_color", NET_UPLOAD_DEF),
+                netColor("net_download_color", NET_DOWNLOAD_DEF)
+            )
+        }
+        binding.netColorPreview.refresh()
+
+        updateColorUI()
+    }
+
+    // 修改颜色并立即应用
+    private fun setColor(value: Int, updateHex: Boolean = true) {
+        customColor = value
+        updateColorUI(updateHex)
+        saveClockColor(value)
+    }
+
+    private fun updateColorUI(updateHex: Boolean = true) {
+        val c = rgb565To888(customColor)
+        binding.cvColorPreview.setCardBackgroundColor(Color.rgb(c.first, c.second, c.third))
+        if (updateHex) {
+            suppressHexWatch = true
+            binding.etHex.setText(rgb565Hex(customColor))
+            binding.etHex.setSelection(binding.etHex.text?.length ?: 0)
+            suppressHexWatch = false
+        }
+        binding.sliderR.value = (customColor shr 11 and 0x1F).toFloat()
+        binding.sliderG.value = (customColor shr 5 and 0x3F).toFloat()
+        binding.sliderB.value = (customColor and 0x1F).toFloat()
+        binding.tvR.text = (customColor shr 11 and 0x1F).toString()
+        binding.tvG.text = (customColor shr 5 and 0x3F).toString()
+        binding.tvB.text = (customColor and 0x1F).toString()
+    }
+
+    // 通用 RGB565 选色弹窗 应用即时生效 确认后关闭
+    private fun showColorPickerDialog(title: String, initial: Int, onApply: (Int) -> Unit) {
         val d = resources.displayMetrics.density
-        var color = getClockColor()
+        var color = initial
 
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -1271,8 +1439,6 @@ class MainActivity : AppCompatActivity() {
             cardElevation = 0f
             val c = rgb565To888(color)
             setCardBackgroundColor(Color.rgb(c.first, c.second, c.third))
-            preventCornerOverlap = false
-            useCompatPadding = false
         }
 
         val hexInputLayout = com.google.android.material.textfield.TextInputLayout(
@@ -1289,8 +1455,8 @@ class MainActivity : AppCompatActivity() {
         val hexInput = com.google.android.material.textfield.TextInputEditText(this).apply {
             setText(rgb565Hex(color))
             textSize = 17f
-            typeface = android.graphics.Typeface.MONOSPACE
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
+            typeface = Typeface.MONOSPACE
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
             filters = arrayOf(android.text.InputFilter.LengthFilter(4))
             isSingleLine = true
         }
@@ -1329,8 +1495,7 @@ class MainActivity : AppCompatActivity() {
         syncUI()
 
         // ── R G B 滑块 ──
-
-        fun addSlider(label: String, labelColor: Int, max: Int, init: Int, onChange: (Int) -> Unit): com.google.android.material.slider.Slider {
+        fun addSlider(label: String, labelColor: Int, max: Int, init: Int, onChange: (Int) -> Unit) {
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = android.view.Gravity.CENTER_VERTICAL
@@ -1339,18 +1504,16 @@ class MainActivity : AppCompatActivity() {
             val labelTv = TextView(this).apply {
                 text = label
                 textSize = 14f
-                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                typeface = Typeface.DEFAULT_BOLD
                 setTextColor(labelColor)
                 width = (20 * d).toInt()
-                gravity = android.view.Gravity.START
             }
             val numTv = TextView(this).apply {
                 text = init.toString()
                 textSize = 14f
-                typeface = android.graphics.Typeface.MONOSPACE
+                typeface = Typeface.MONOSPACE
                 setTextColor(MaterialColors.getColor(this@MainActivity, com.google.android.material.R.attr.colorOnSurface, Color.DKGRAY))
                 width = (28 * d).toInt()
-                gravity = android.view.Gravity.START
             }
             val slider = com.google.android.material.slider.Slider(this).apply {
                 valueFrom = 0f
@@ -1358,7 +1521,6 @@ class MainActivity : AppCompatActivity() {
                 stepSize = 1f
                 value = init.toFloat()
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                setPadding(0, 0, 0, 0)
             }
             slider.addOnChangeListener { _, value, fromUser ->
                 if (fromUser) {
@@ -1372,7 +1534,6 @@ class MainActivity : AppCompatActivity() {
             container.addView(row)
             sliderViews.add(slider)
             numTvViews.add(numTv)
-            return slider
         }
 
         addSlider("R", Color.rgb(200, 0, 0), 31, color shr 11 and 0x1F) { r5 -> color = (color and 0x07FF) or (r5 shl 11) }
@@ -1392,7 +1553,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val dialog = MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.clock_color_title)
+            .setTitle(title)
             .setView(container)
             .setNegativeButton(R.string.btn_cancel, null)
             .setPositiveButton(R.string.btn_confirm, null)
@@ -1401,24 +1562,27 @@ class MainActivity : AppCompatActivity() {
 
         dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
             applyInput()
-            saveClockColor(color)
+            onApply(color)
             dialog.dismiss()
         }
         dialog.getButton(android.app.AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
             applyInput()
-            saveClockColor(color)
+            onApply(color)
         }
     }
 
     private fun showAboutDialog() {
         MaterialAlertDialogBuilder(this)
             .setTitle(R.string.menu_about)
-            .setView(selectableBodyView(getString(R.string.about_content)))
+            .setView(selectableBodyView(getString(R.string.about_content, appVersion())))
             .setPositiveButton(R.string.btn_close, null)
             .show()
     }
 
-    /** 可长按复制、超长可滚动的弹窗内容视图 */
+    private fun appVersion(): String =
+        runCatching { packageManager.getPackageInfo(packageName, 0).versionName ?: "" }.getOrDefault("")
+
+    // 可长按复制 超长可滚动的弹窗内容视图
     private fun selectableBodyView(content: String, maxHeightDp: Int = 360): TextView {
         val d = resources.displayMetrics.density
         return TextView(this).apply {
@@ -1474,7 +1638,7 @@ class MainActivity : AppCompatActivity() {
         fetchFromHtmlPage() ?: fetchFromApi()
     }.getOrNull()
 
-    /** 优先抓 releases 页面 */
+    // 优先抓 releases 页面
     private fun fetchFromHtmlPage(): ReleaseInfo? = runCatching {
         val conn = URL(RELEASES_URL).openConnection() as HttpURLConnection
         conn.requestMethod = "GET"
@@ -1517,7 +1681,7 @@ class MainActivity : AppCompatActivity() {
         }
     }.getOrNull()
 
-    /** 提取 releases 页面首个 markdown-body 作为更新日志 */
+    // 提取 releases 页面首个 markdown body 作为更新日志
     private fun extractReleaseNotes(html: String): String? {
         var idx = html.indexOf("markdown-body")
         while (idx >= 0) {
@@ -1575,7 +1739,7 @@ class MainActivity : AppCompatActivity() {
         return s.trim().replace(Regex("\\n{3,}"), "\n\n")
     }
 
-    /** 将 Markdown 转为纯文本 */
+    // 将 Markdown 转为纯文本
     private fun renderMarkdownAsText(md: String): String {
         var s = md
         s = s.replace(Regex("```[\\s\\S]*?```"), "")
@@ -1615,14 +1779,14 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** 仅当日志原本就在底部时才自动滚到底，避免把正在向上翻看的用户拽回去 */
+    // 仅当日志原本就在底部时才自动滚到底 避免把正在向上翻看的用户拽回去
     private fun scrollLogIfAtBottom() {
         if (!binding.logScroll.canScrollVertically(1)) {
             binding.logScroll.post { binding.logScroll.fullScroll(ScrollView.FOCUS_DOWN) }
         }
     }
 
-    /** 命令行风格进度条：单行实时覆盖刷新，限流避免高频更新导致闪烁 */
+    // 命令行风格进度条 单行实时覆盖刷新 限流避免高频更新导致闪烁
     private fun renderProgress(done: Int, total: Int) {
         val doneFinal = done >= total
         val now = SystemClock.elapsedRealtime()
@@ -1643,7 +1807,7 @@ class MainActivity : AppCompatActivity() {
         scrollLogIfAtBottom()
     }
 
-    /** 删除当前进度行，烧录完成后保留 100% 行 */
+    // 删除当前进度行 烧录完成后保留 100% 行
     private fun removeProgressLine() {
         if (progressStart < 0 || progressDone) return
         val text = binding.tvLog.text
@@ -1654,7 +1818,18 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateStatus(status: String) {
-        runOnUiThread { binding.tvStatus.text = status }
+        runOnUiThread {
+            binding.tvStatus.text = status
+            val isConn = connected
+            val isConnecting = status.contains(getString(R.string.status_connecting))
+            val colorRes = when {
+                isConn -> com.google.android.material.R.attr.colorPrimary
+                isConnecting -> com.google.android.material.R.attr.colorTertiary
+                else -> com.google.android.material.R.attr.colorOutline
+            }
+            val tintColor = MaterialColors.getColor(this, colorRes, Color.GRAY)
+            binding.ivStatusIndicator.setColorFilter(tintColor)
+        }
     }
 
     private fun updateStateLabel(state: Int) {

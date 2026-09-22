@@ -5,15 +5,14 @@ import com.msu2.android.usb.Msu2Serial
 import kotlinx.coroutines.delay
 import java.io.ByteArrayOutputStream
 
-/** 将素材烧录到 MSU2 Flash */
+// 闪存数据写入管理器
 class FlashWriter {
 
-    /** MSU2 Flash 总容量 1024KB */
     companion object {
         const val FLASH_TOTAL_PAGES = 4096
     }
 
-    /** 烧录指定数据 */
+    // 写入数据到设备闪存
     suspend fun flash(
         serial: Msu2Serial,
         data: ByteArray,
@@ -23,7 +22,7 @@ class FlashWriter {
         onProgress: (done: Int, total: Int) -> Unit = { _, _ -> }
     ) {
         var fsize = data.size
-        if (zk) fsize -= 6 // 字库文件末尾不是点阵
+        if (zk) fsize -= 6 // 字库文件末尾非点阵数据
         onLog("素材大小 ${data.size} B，有效数据 ${fsize} B")
 
         val totalPages = if (fsize % 256 != 0) fsize / 256 + 1 else fsize / 256
@@ -35,12 +34,11 @@ class FlashWriter {
         var written = 0
 
         if (!zk) {
-            // 照片先擦除再写入
+            // 普通图像数据先擦除再写入
             onLog("擦除 $totalPages 页 (起始页 $page)")
-            // 擦除按 4KB 扇区进行
             val eraseTimeoutMs = maxOf(10_000L, totalPages * 100L)
             serial.ack(Msu2Protocol.eraseFlashPage(page, totalPages), waitMs = eraseTimeoutMs, requireResponse = true)
-            // 擦除完成后稍作稳定
+            // 擦除后等待硬件状态稳定
             delay(200)
         }
 
@@ -68,7 +66,7 @@ class FlashWriter {
         onLog("烧写完成（共 ${p - page} 页）")
     }
 
-    /** 生成写缓存指令 */
+    // 构造单页闪存数据写入指令序列
     private fun buildPageCommands(data: ByteArray, off: Int, size: Int): ByteArray {
         val out = ByteArrayOutputStream(64 * 6)
         for (i in 0 until 64) {

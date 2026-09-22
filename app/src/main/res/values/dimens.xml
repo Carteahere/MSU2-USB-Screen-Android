@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 页面间距与边距 -->
+    <dimen name="page_padding">16dp</dimen>
+    <dimen name="section_gap">16dp</dimen>
+    <dimen name="item_gap">12dp</dimen>
+    <dimen name="small_gap">8dp</dimen>
+    <dimen name="card_padding">16dp</dimen>
+
+    <!-- 控件尺寸与圆角大小 -->
+    <dimen name="control_height">48dp</dimen>
+    <dimen name="corner_card">20dp</dimen>
+    <dimen name="corner_card_small">12dp</dimen>
+    <dimen name="corner_control">24dp</dimen>
+    <dimen name="corner_control_small">12dp</dimen>
+</resources>

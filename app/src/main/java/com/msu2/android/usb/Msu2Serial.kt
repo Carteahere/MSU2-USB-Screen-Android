@@ -12,7 +12,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.IOException
 
-/** MSU2 设备串口封装 */
+// MSU2 设备串口通信封装
 class Msu2Serial(
     private val usbManager: UsbManager,
     private val device: UsbDevice
@@ -23,9 +23,9 @@ class Msu2Serial(
         private const val BUF_SIZE = 4096
         private const val READ_TIMEOUT = 200
         private const val WRITE_TIMEOUT = 3000
-        /** 屏幕数据分块大小 */
+        // 屏幕数据单包分块大小
         private const val SCREEN_CHUNK_SIZE = 60
-        /** 每块屏幕数据的写入截止时间 */
+        // 每块屏幕数据写入超时限制
         private const val SCREEN_WRITE_TIMEOUT = 5000
     }
 
@@ -35,7 +35,7 @@ class Msu2Serial(
 
     val isConnected: Boolean get() = port != null
 
-    /** 打开端口并初始化 */
+    // 打开串口端口并完成初始化
     suspend fun open() {
         val driver = UsbSerialProber.getDefaultProber().probeDevice(device)
             ?: throw IOException("未找到适用于该设备的串口驱动（需 CDC-ACM）")
@@ -44,7 +44,7 @@ class Msu2Serial(
             ?: throw IOException("无法打开 USB 设备")
         p.open(connection)
         p.setParameters(BAUD, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
-        // 与电脑版保持一致
+        // 与桌面版通信参数保持一致
         try { p.setDTR(true) } catch (_: Exception) {}
         try { p.setRTS(false) } catch (_: Exception) {}
         port = p
@@ -52,7 +52,7 @@ class Msu2Serial(
         Log.i(TAG, "serial opened, ${p.portNumber}")
     }
 
-    /** 关闭端口 */
+    // 关闭串口连接
     suspend fun close() {
         mutex.withLock {
             val p = port ?: return
@@ -61,11 +61,9 @@ class Msu2Serial(
         }
     }
 
-    // 握手
-
-    /** 与设备握手 */
+    // 与硬件设备完成握手确认
     suspend fun handshake(): Int = mutex.withLock {
-        // 设备上电后需等待才能广播
+        // 设备上电后需等待广播信号
         var version = -1
         var lastBytes = ""
         for (attempt in 1..3) {
@@ -125,30 +123,35 @@ class Msu2Serial(
         return false
     }
 
-    // 指令读写
-
-    /** 读 8bit 寄存器 */
+    // 读取单字节寄存器
     suspend fun readU8(add: Int): Int = mutex.withLock {
         writeRaw(Msu2Protocol.readU8(add))
         val resp = readResponse()
         if (resp.size >= 6) resp[5].toInt() and 0xFF else 0
     }
 
-    /** 读 16bit 寄存器 */
+    // 读取双字节寄存器
     suspend fun readU16(add: Int): Int = mutex.withLock {
         writeRaw(Msu2Protocol.readU16(add))
         val resp = readResponse()
         if (resp.size >= 6) ((resp[4].toInt() and 0xFF) * 256 + (resp[5].toInt() and 0xFF)) else 0
     }
 
-    /** 读 ADC 通道 */
+    // 读取模拟量采集通道
     suspend fun readAdc(ch: Int): Int = mutex.withLock {
         writeRaw(Msu2Protocol.readAdc(ch))
         val resp = readResponse()
         if (resp.size >= 6) ((resp[4].toInt() and 0xFF) * 256 + (resp[5].toInt() and 0xFF)) else 0
     }
 
-    /** 发送需确认指令并等设备响应 */
+    // 读取闪存指定地址单字节
+    suspend fun readFlash(add: Int): Int = mutex.withLock {
+        writeRaw(Msu2Protocol.readFlash(add))
+        val resp = readResponse()
+        if (resp.size >= 6) resp[5].toInt() and 0xFF else 0
+    }
+
+    // 发送指令并等待应答信号
     suspend fun ack(cmd: ByteArray, waitMs: Long = 1000, requireResponse: Boolean = false) {
         mutex.withLock {
             writeRaw(cmd)
@@ -158,7 +161,7 @@ class Msu2Serial(
         }
     }
 
-    /** 发送屏幕显存数据按块写入 */
+    // 分包发送屏幕图像数据
     suspend fun sendScreen(cmd: ByteArray, abortCheck: (() -> Boolean)? = null) {
         mutex.withLock {
             var off = 0
@@ -167,7 +170,7 @@ class Msu2Serial(
                 writeRaw(cmd.copyOfRange(off, off + n), SCREEN_WRITE_TIMEOUT)
                 off += n
                 if (off < cmd.size) {
-                    // 大帧中途响应取消
+                    // 大包传输期间响应协程取消
                     currentCoroutineContext().ensureActive()
                     if (abortCheck?.invoke() == true) return@withLock
                 }
@@ -176,19 +179,17 @@ class Msu2Serial(
         }
     }
 
-    /** 丢弃所有缓冲数据 */
+    // 清空接收缓冲区数据
     suspend fun drain() {
         mutex.withLock { drainAll() }
     }
-
-    // 底层读写
 
     private fun writeRaw(data: ByteArray, timeoutMs: Int = WRITE_TIMEOUT) {
         val p = port ?: throw IOException("串口未打开")
         p.write(data, timeoutMs)
     }
 
-    /** 等待并返回 6 字节响应 */
+    // 等待并提取固定响应报文
     private suspend fun readResponse(): ByteArray {
         val deadline = System.currentTimeMillis() + 3000
         while (System.currentTimeMillis() < deadline) {
@@ -204,7 +205,7 @@ class Msu2Serial(
         return ByteArray(0)
     }
 
-    /** 等待至少收到 1 字节 */
+    // 持续监听直到读取到有效字节
     private suspend fun readUntilData(timeoutMs: Long = 1000): Boolean {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
@@ -214,7 +215,7 @@ class Msu2Serial(
         return false
     }
 
-    /** 读取并丢弃所有缓冲直到设备静默 */
+    // 持续排空缓冲区直至通信静默
     private suspend fun drainAll() {
         val deadline = System.currentTimeMillis() + 300
         var silent = 0

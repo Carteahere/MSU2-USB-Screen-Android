@@ -79,11 +79,6 @@ app/src/main/java/com/msu2/android/
 
 ## 截图
 
-APP
-
-<img width="600" height="680" alt="app" src="https://github.com/user-attachments/assets/b2fb07ef-4eba-4960-b9d7-62b0634a48e1" />
-
-
 时间
 
 <img width="400" height="234" alt="sj" src="https://github.com/user-attachments/assets/73294437-a73b-4cef-9bb2-27d66ec91088" />

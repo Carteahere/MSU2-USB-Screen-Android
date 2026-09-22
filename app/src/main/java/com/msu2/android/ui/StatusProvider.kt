@@ -16,12 +16,12 @@ import java.io.BufferedReader
 import java.io.File
 import java.io.FileReader
 
-/** 手机状态采集 */
+// 手机各项系统硬件状态采集
 object StatusProvider {
 
     private const val TAG = "StatusProvider"
 
-    /** CPU 占用率 */
+    // 获取处理器瞬时使用率
     suspend fun cpuUsage(): Int = withContext(Dispatchers.IO) {
         val t1 = readCpuStat()
         delay(300)
@@ -37,7 +37,7 @@ object StatusProvider {
 
     private data class CpuStat(val total: Long, val idle: Long)
 
-    /** 读取 /proc/stat 汇总行 */
+    // 读取系统处理器状态文件
     private fun readCpuStat(): CpuStat {
         var total = 0L
         var idle = 0L
@@ -65,7 +65,7 @@ object StatusProvider {
         return CpuStat(total, idle)
     }
 
-    /** 内存占用率 */
+    // 获取当前运行内存使用率
     fun memoryUsage(context: Context): Int {
         val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
         val mem = ActivityManager.MemoryInfo()
@@ -76,7 +76,7 @@ object StatusProvider {
         return (((total - avail) * 100) / total).toInt().coerceIn(0, 100)
     }
 
-    /** 电池电量 */
+    // 获取当前电池剩余电量
     fun batteryPercent(context: Context): Int {
         return try {
             val bm = context.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
@@ -89,7 +89,7 @@ object StatusProvider {
         }
     }
 
-    /** 内部存储占用率 */
+    // 获取内部存储空间使用率
     fun storageUsage(context: Context): Int {
         return try {
             val stat = StatFs(Environment.getDataDirectory().path)
@@ -101,7 +101,7 @@ object StatusProvider {
         }
     }
 
-    /** 累计收发字节 */
+    // 获取网络收发总流量计数
     fun netCounters(): Pair<Long, Long> {
         val rx = TrafficStats.getTotalRxBytes()
         val tx = TrafficStats.getTotalTxBytes()

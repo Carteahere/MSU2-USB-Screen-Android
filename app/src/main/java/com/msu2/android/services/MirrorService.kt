@@ -31,7 +31,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-/** 屏幕镜像前台服务 */
+// 屏幕镜像前台服务
 class MirrorService : Service() {
 
     companion object {
@@ -57,7 +57,7 @@ class MirrorService : Service() {
         }
     }
 
-    /** 帧总线 */
+    // 共享帧数据总线
     object MirrorBus {
         class Frame(val data: ByteArray, val x: Int, val y: Int, val w: Int, val h: Int)
         @Volatile var latest: Frame? = null
@@ -107,17 +107,17 @@ class MirrorService : Service() {
 
         scope.launch {
             try {
-                // 1) 启动前台服务
+                // 启动前台服务展示通知
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     startForeground(NOTIF_ID, buildNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
                 } else {
                     startForeground(NOTIF_ID, buildNotification())
                 }
-                // 2) 获取投影 token
+                // 获取屏幕投影令牌
                 val mp = projectionManager!!.getMediaProjection(resultCode, resultData)
                     ?: throw IllegalStateException("getMediaProjection 返回空")
                 mediaProjection = mp
-                // 3) 创建虚拟显示
+                // 创建虚拟显示进行捕获
                 startCapture(mp)
             } catch (e: Exception) {
                 Log.e(TAG, "startProjection failed", e)
@@ -168,7 +168,7 @@ class MirrorService : Service() {
         virtualDisplay = vd
     }
 
-    /** 投屏捕获尺寸 */
+    // 计算投屏捕获目标尺寸
     private fun computeFitSize(): Pair<Int, Int> =
         if (isLandscape()) Msu2Protocol.SCREEN_W to Msu2Protocol.SCREEN_H
         else Msu2Protocol.MIRROR_W to Msu2Protocol.MIRROR_H
@@ -206,12 +206,12 @@ class MirrorService : Service() {
             val rh: Int
             val frame: IntArray
             if (w > h) {
-                // 横屏整屏直显
+                // 横屏模式直接输出
                 rw = w
                 rh = h
                 frame = ints
             } else {
-                // 竖屏软件旋转
+                // 竖屏模式软件旋转
                 rw = h
                 rh = w
                 frame = IntArray(rw * rh)

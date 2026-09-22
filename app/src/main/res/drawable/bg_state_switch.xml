@@ -2,13 +2,9 @@
 <ripple xmlns:android="http://schemas.android.com/apk/res/android"
     android:color="?attr/colorOnPrimary">
     <item>
-        <inset
-            android:insetTop="4dp"
-            android:insetBottom="4dp">
-            <shape android:shape="rectangle">
-                <corners android:radius="100dp" />
-                <solid android:color="?attr/colorPrimary" />
-            </shape>
-        </inset>
+        <shape android:shape="rectangle">
+            <corners android:radius="@dimen/corner_control" />
+            <solid android:color="?attr/colorPrimary" />
+        </shape>
     </item>
 </ripple>

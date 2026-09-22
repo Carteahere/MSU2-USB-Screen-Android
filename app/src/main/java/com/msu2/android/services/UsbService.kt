@@ -13,7 +13,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.msu2.android.R
 
-/** 连接期间前台保活 */
+// 保持后台前台服务运行状态
 class UsbService : Service() {
 
     companion object {

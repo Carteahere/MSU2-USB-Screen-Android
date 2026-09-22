@@ -11,20 +11,32 @@
     <string name="btn_state_prev">上一个</string>
     <string name="btn_state_next">下一个</string>
     <string name="btn_rotate">旋转</string>
-    <string name="btn_flash">烧录</string>
     <string name="rotate_done">显示方向已旋转 180°</string>
 
+    <string name="nav_home">操作</string>
+    <string name="nav_custom">自定义</string>
+    <string name="nav_flash">烧录</string>
+
     <string name="menu_title">菜单</string>
-    <string name="menu_time">时间</string>
     <string name="menu_update">更新</string>
     <string name="menu_about">关于</string>
-    <string name="clock_color_title">时钟数字颜色</string>
+    <string name="clock_color_title">时钟</string>
+    <string name="clock_num_color_title">数字颜色</string>
+    <string name="btn_reset">恢复默认</string>
     <string name="btn_confirm">确认</string>
     <string name="btn_apply">应用</string>
     <string name="btn_open">打开</string>
     <string name="btn_cancel">取消</string>
     <string name="btn_close">关闭</string>
-    <string name="about_content">项目：\nhttps://github.com/SadYuyuko/MSU2-USB-Screen-Android\n基于原版 MSU2_MINI_DemoV1.6.py 移植\n\n关闭投屏弹窗：ADB执行\nappops set com.msu2.android PROJECT_MEDIA allow</string>
+    <string name="clock_mode_title">显示模式</string>
+    <string name="clock_mode_hm">时:分</string>
+    <string name="clock_mode_hms">时:分:秒</string>
+    <string name="clock_mode_ms">时:分:秒.毫秒</string>
+    <string name="net_color_title">网速</string>
+    <string name="net_text_color">文字颜色</string>
+    <string name="net_upload_color">上传曲线</string>
+    <string name="net_download_color">下载曲线</string>
+    <string name="about_content">版本：v%1$s\n项目：\nhttps://github.com/Carteahere/MSU2-USB-Screen-Android\n基于原版 MSU2_MINI_DemoV1.6.py 移植\n\n关闭投屏弹窗：ADB执行\nappops set com.msu2.android PROJECT_MEDIA allow</string>
     <string name="update_checking">正在检查更新…</string>
     <string name="update_available">检测到最新版本：%1$s</string>
     <string name="update_changelog">更新日志：</string>
@@ -38,21 +50,26 @@
     <string name="state_5">屏幕镜像</string>
     <string name="state_6">网速</string>
 
-    <string name="log_title">运行日志：</string>
+    <string name="log_title">运行日志</string>
+    <string name="btn_clear_log">清空日志</string>
+    <string name="btn_copy_log">复制日志</string>
+    <string name="log_copied">日志已复制到剪贴板</string>
 
     <string name="no_device">未检测到 MSU2 设备，请通过 OTG 线连接</string>
     <string name="permission_denied">USB 权限被拒绝</string>
     <string name="connect_failed">连接失败：%1$s</string>
     <string name="device_detached">MSU2 已断开</string>
-    <string name="flash_title">选择要烧录的素材</string>
-    <string name="flash_params_title">烧录参数</string>
+    <string name="flash_section_kind">素材类型</string>
+    <string name="flash_pick_file">选择文件并烧录</string>
+    <string name="flash_page_hint">页号</string>
+    <string name="flash_bin_page_hint">起始页（0 - 4095）</string>
     <string name="flash_type_photo">图片类（先擦除后写入）</string>
     <string name="flash_type_zk">字库类（不擦除）</string>
-    <string name="flash_confirm">确认</string>
     <string name="flash_kind_gif">GIF（36帧 160x80 自动处理）</string>
     <string name="flash_kind_photo">图片（jpg/png 160x80 烧录至指定页）</string>
     <string name="flash_kind_bin">固件（.bin 原始数据）</string>
     <string name="flash_target_title">选择烧录目标</string>
+    <string name="flash_params_title">烧录参数</string>
     <string name="flash_target_clock">时钟背景（页 3826）</string>
     <string name="flash_target_photo">照片（页 3926）</string>
     <string name="flash_target_custom">自定义页</string>
